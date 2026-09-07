@@ -116,10 +116,29 @@ else
   mkdir -p "${INSTALL_DIR}"
 fi
 
+# issue-361: install by atomic rename, never in-place cp. Overwriting an
+# existing binary reuses its inode, and on macOS the kernel's cached
+# code-signing state for that vnode goes stale against the new content —
+# an exec in the following moments is killed with SIGKILL (Code Signature
+# Invalid) before its first instruction, which is what killed the 0.6.4
+# self-update's relaunch child. Staging in the target directory keeps the
+# mv a same-filesystem rename (fresh vnode, clean signature evaluation),
+# and a running old binary keeps its unlinked inode. Quarantine is cleared
+# on the staged file so the installed one never carries it.
+install_binary() {
+  local src="$1" target="$2"
+  local staged="${target}.new.$$"
+  cp "${src}" "${staged}"
+  chmod +x "${staged}"
+  if [[ "${OS}" == "Darwin" ]]; then
+    xattr -d com.apple.quarantine "${staged}" 2>/dev/null || true
+  fi
+  mv -f "${staged}" "${target}"
+}
+
 TARGET="${INSTALL_DIR}/bram"
 echo "Installing to ${TARGET}…"
-cp "${BIN}" "${TARGET}"
-chmod +x "${TARGET}"
+install_binary "${BIN}" "${TARGET}"
 
 # The dedicated hook binary rides beside the app: ~/.bram/bram-guard links to
 # the sibling of the running executable, so it must land in the same dir.
@@ -128,17 +147,8 @@ chmod +x "${TARGET}"
 GUARD_BIN="$(find "${TMP}" -type f -name bram-guard | head -n 1)"
 if [[ -n "${GUARD_BIN}" ]]; then
   GUARD_TARGET="${INSTALL_DIR}/bram-guard"
-  cp "${GUARD_BIN}" "${GUARD_TARGET}"
-  chmod +x "${GUARD_TARGET}"
+  install_binary "${GUARD_BIN}" "${GUARD_TARGET}"
   echo "Installed: ${GUARD_TARGET}"
-fi
-
-# macOS: clear quarantine so Gatekeeper doesn't block first launch.
-if [[ "${OS}" == "Darwin" ]]; then
-  xattr -d com.apple.quarantine "${TARGET}" 2>/dev/null || true
-  if [[ -n "${GUARD_BIN:-}" ]]; then
-    xattr -d com.apple.quarantine "${INSTALL_DIR}/bram-guard" 2>/dev/null || true
-  fi
 fi
 
 echo "Installed: ${TARGET}"

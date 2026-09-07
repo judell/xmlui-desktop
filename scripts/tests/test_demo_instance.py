@@ -79,16 +79,34 @@ class DemoInstanceTests(unittest.TestCase):
         self.new()
         claims = json.loads((self.repo / demo.CLAIMS).read_text())["intervals"]
 
-        def patch_for(item_id: str, path: str) -> str:
+        # Byte-exact on purpose: routing the diff through text mode and
+        # write_text() lets platform newline translation rewrite the patch
+        # (CRLF on Windows), and git apply then correctly refuses context
+        # lines that no longer match the LF blobs. The bytes git diff
+        # produced are the bytes git apply must check.
+        def patch_for(item_id: str, path: str) -> bytes:
             patches = []
             for index, record in enumerate(claims[:-1]):
                 if record["ids"] == [item_id]:
                     patches.append(
-                        git(self.repo, "diff", record["ref"], claims[index + 1]["ref"], "--", path)
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(self.repo),
+                                "diff",
+                                record["ref"],
+                                claims[index + 1]["ref"],
+                                "--",
+                                path,
+                            ],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                        ).stdout
                     )
-            return "\n".join(patches) + "\n"
+            return b"".join(patches)
 
-        def apply_check(candidate: str, bases: list[str] | None = None) -> bool:
+        def apply_check(candidate: bytes, bases: list[bytes] | None = None) -> bool:
             index_path = Path(self.temp.name) / f"index-{time.time_ns()}"
             patch_path = Path(self.temp.name) / f"patch-{time.time_ns()}"
             env = os.environ.copy()
@@ -99,7 +117,7 @@ class DemoInstanceTests(unittest.TestCase):
                 check=True,
             )
             for base_patch in bases or []:
-                patch_path.write_text(base_patch)
+                patch_path.write_bytes(base_patch)
                 subprocess.run(
                     ["git", "-C", str(self.repo), "apply", "--cached", str(patch_path)],
                     env=env,
@@ -107,7 +125,7 @@ class DemoInstanceTests(unittest.TestCase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
-            patch_path.write_text(candidate)
+            patch_path.write_bytes(candidate)
             checked = subprocess.run(
                 ["git", "-C", str(self.repo), "apply", "--cached", "--check", str(patch_path)],
                 env=env,

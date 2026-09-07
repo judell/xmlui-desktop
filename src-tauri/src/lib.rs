@@ -19847,6 +19847,15 @@ fn whisper_status(app: AppHandle, state: State<'_, WhisperState>) -> WhisperStat
 
 #[tauri::command]
 fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
+    log_from_right_pane_impl(&app, payload);
+}
+
+// issue-343: the pane trace sink, callable from both the invoke command
+// above and the POST /__trace/pane fetch fallback. The invoke bridge was
+// the trace transport's ONLY path, so an invoke wedge silenced every
+// iframe trace at exactly the moment evidence mattered — the instrument
+// shared the dead channel with the commands it witnesses.
+fn log_from_right_pane_impl<R: tauri::Runtime>(app: &AppHandle<R>, payload: serde_json::Value) {
     // Route structured iframe/parent logs into bram-trace.log so they're
     // grep-able after a restart. Three categories today:
     //
@@ -19895,7 +19904,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
             let (safe_label, _) = redact_sensitive_text(label);
             let (safe_rest, _) = redact_sensitive_text(&rest_str);
             append_bram_trace_line(
-                &app,
+                app,
                 category,
                 &format!("{}={} {}", label_key, safe_label, safe_rest),
             );
@@ -19914,7 +19923,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if drift_ms >= 2000 && !hidden {
-                    maybe_emit_memory_receipt(&app, drift_ms);
+                    maybe_emit_memory_receipt(app, drift_ms);
                 }
             }
         }
@@ -19929,7 +19938,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
 // spam. Sampling is on-demand only — zero cost until a freeze is being
 // reported — and platform-gated: macOS carries the incident class; other
 // platforms emit nothing until equivalent calls are added.
-fn maybe_emit_memory_receipt(app: &AppHandle, drift_ms: u64) {
+fn maybe_emit_memory_receipt<R: tauri::Runtime>(app: &AppHandle<R>, drift_ms: u64) {
     static LAST_EMIT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -54380,6 +54389,28 @@ fn handle_queue_save<R: tauri::Runtime>(
     }
 }
 
+// issue-343: POST /__trace/pane — the fetch fallback for the pane's trace
+// transport. logToHost rides the Tauri invoke bridge; when getTauriInvoke()
+// returns null (the #343 wedge class), helpers.js falls back to this route
+// with a transport=fetch-fallback field, so a line arriving here is itself
+// evidence of which channel died. Same sink and redaction as the invoke
+// command (log_from_right_pane_impl).
+fn handle_trace_pane<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+) -> (u16, &'static str, Vec<u8>) {
+    const JSON: &str = "application/json; charset=utf-8";
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (
+            400,
+            JSON,
+            br#"{"ok":false,"error":"invalid json"}"#.to_vec(),
+        );
+    };
+    log_from_right_pane_impl(app, payload);
+    (200, JSON, br#"{"ok":true}"#.to_vec())
+}
+
 // POST /__audit/direct-edit — audit-only breadcrumb route
 // (opt-out-single-phrase-and-audit). Codex prose opt-outs already record a
 // `direct-edit` audit line via the host `toTurn` matcher
@@ -58928,6 +58959,14 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
             let mut buf = Vec::new();
             let _ = request.as_reader().read_to_end(&mut buf);
             handle_audit_direct_edit(app, &buf)
+        }
+    } else if path == "__trace/pane" {
+        if method != "POST" {
+            (405, "text/plain; charset=utf-8", b"POST only".to_vec())
+        } else {
+            let mut buf = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut buf);
+            handle_trace_pane(app, &buf)
         }
     } else if path == "__describe-command" {
         if method != "POST" {

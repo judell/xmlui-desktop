@@ -630,7 +630,13 @@ window.toShell = function (text) {
     });
   } catch (e) {}
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    // issue-343: affirmative evidence at the link that died. In the target
+    // pane this no-op is by design and the trace goes nowhere (host routes
+    // refused); in the agent pane a line here names the wedge.
+    window.__bramIframeTrace("host-helper", { op: "no-invoke", fn: "toShell" });
+    return;
+  }
   invoke("queue_pty_intent", { payload: { kind: "toShell", data: s } }).catch(function (e) {
     console.error("toShell queue_pty_intent", e);
     try {
@@ -661,7 +667,12 @@ window.toTurn = function (text) {
   // a filesystem envelope with full fidelity — multiline text survives.
   var normalized = s;
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    // issue-343: see toShell — the wedge's breadcrumb, silent where refusal
+    // is by design.
+    window.__bramIframeTrace("host-helper", { op: "no-invoke", fn: "toTurn" });
+    return;
+  }
   invoke("log_from_right_pane", {
     payload: {
       kind: "iframe-trace",
@@ -737,7 +748,11 @@ window.submitAuthorizedWorklistTurn = function (result, onFailure) {
 // arrow keys, or single-keypress menu shortcuts.
 window.sendKeys = function (text) {
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    // issue-343: see toShell.
+    window.__bramIframeTrace("host-helper", { op: "no-invoke", fn: "sendKeys" });
+    return;
+  }
   invoke("queue_pty_intent", { payload: { kind: "sendKeys", data: String(text) } }).catch(function (e) {
     console.error("sendKeys queue_pty_intent", e);
     try {
@@ -1029,7 +1044,25 @@ window.logToHost = function (payload) {
   // below resolves the actual setting.
   if (window.__bramTracesEnabled === false) return;
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    // issue-343: the trace transport must not share its only channel with
+    // the commands it witnesses. With the invoke bridge gone (the wedge
+    // class #343 reported), fall back to the loopback route so evidence
+    // still lands; transport=fetch-fallback marks each line as proof of
+    // which channel died. In the cross-origin target pane both channels
+    // are refused by design — the catch keeps that case silent, as before.
+    try {
+      var marked = Object.assign({ transport: "fetch-fallback" }, payload);
+      window
+        .fetch("/__trace/pane", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(marked),
+        })
+        .catch(function () {});
+    } catch (e) {}
+    return;
+  }
   invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
 window.__bramSensitiveTraceKey = function (key) {
@@ -5799,7 +5832,11 @@ window.__bramSetAgentMenuFromTurnState = function (turnState, surface) {
 // subscribeTauriEvent exists.
 window.openExternal = function (url) {
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    // issue-343: see toShell.
+    window.__bramIframeTrace("host-helper", { op: "no-invoke", fn: "openExternal" });
+    return;
+  }
   return invoke("open_url", { url: String(url) }).catch(function (e) {
     console.error("openExternal open_url", e);
     if (typeof window.__bramShowLinkPreviewError === "function") {
@@ -11963,7 +12000,22 @@ window.subscribeRightPaneSize = function (callback) {
 // state refresh without a manual reload.
 window.gitPush = function (commitsDs, statusDs, branch, onError) {
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  // issue-343: evidence before the guard — the old order (guard, then
+  // nothing) made a dead Push click perfectly silent, which was Andrew's
+  // exact signature on #343's second surface. And the dead case is now
+  // user-visible through the pushError banner the button already renders,
+  // naming the recovery lever the field event proved.
+  window.__bramIframeTrace("click", {
+    target: "push",
+    op: invoke ? "act" : "no-invoke",
+    branch: branch || "",
+  });
+  if (!invoke) {
+    if (typeof onError === "function") {
+      onError("Push could not reach the host (IPC unavailable) — reload the pane or restart Bram");
+    }
+    return;
+  }
   invoke("git_push", { branch: branch || null })
     .then(function () {
       if (commitsDs && typeof commitsDs.refetch === "function") {
@@ -12329,7 +12381,19 @@ window.__bramQueueEditedLabel = function (updatedAtMs) {
 // contract holds: a clicked button, never an agent channel.
 window.__bramCloseIssue = function (number, comment, onDone, onError) {
   var invoke = getTauriInvoke();
-  if (!invoke) return;
+  // issue-343: same treatment as gitPush — trace first, and a dead bridge
+  // reports through the caller's error surface instead of vanishing.
+  window.__bramIframeTrace("click", {
+    target: "close-issue",
+    op: invoke ? "act" : "no-invoke",
+    number: number,
+  });
+  if (!invoke) {
+    if (typeof onError === "function") {
+      onError("Close could not reach the host (IPC unavailable) — reload the pane or restart Bram");
+    }
+    return;
+  }
   invoke("issue_close_manual", { number: number, comment: comment || "" })
     .then(function () {
       if (typeof onDone === "function") onDone();

@@ -1742,9 +1742,25 @@ pub(crate) fn expected_repo_locator(cwd: &Path) -> Option<String> {
 // hostname, added same day so two same-OS machines are distinguishable and
 // the sweep can classify same-account comments exactly). Older two- and
 // three-slot signatures parse with the trailing fields None.
+//
+// An optional `version` slot (added 2026-09-07) leads the parenthetical when
+// present: a first slot of the literal form "Bram <version>" (a non-empty
+// remainder after the "Bram " prefix) is captured as `version` and the
+// standing slots shift over by one — thread becomes the second slot rather
+// than the first. A first slot that merely starts with letters spelling
+// "Bram" without the trailing space plus content (e.g. "Bramble 5") is not a
+// version: it falls through to ordinary thread validation and fails it.
+// Signatures with no version slot at all parse exactly as before, with
+// `version: None`.
 pub(crate) struct AgentSignature<'a> {
     // The thread slot ("main thread" | "subagent") is validated by the parser
     // but not stored: no consumer reads it yet. Re-add the field when one does.
+    // The version slot ("Bram 0.6.5", added 2026-09-07) is likewise parsed
+    // and validated but has no in-crate reader yet — the Awaiting You display
+    // consumer is deferred to a follow-up item (parallel-dispatch re-scope,
+    // 2026-09-07).
+    #[allow(dead_code)]
+    pub(crate) version: Option<&'a str>,
     pub(crate) model: &'a str,
     pub(crate) os: Option<&'a str>,
     pub(crate) machine: Option<&'a str>,
@@ -1770,7 +1786,11 @@ pub(crate) fn parse_agent_signature(line: &str) -> Option<AgentSignature<'_>> {
     }
     let (standing, rest) = rest.split_once(") speaking from the ")?;
     let mut slots = standing.split(", ");
-    let thread = slots.next()?.trim();
+    let first = slots.next()?.trim();
+    let (version, thread) = match first.strip_prefix("Bram ") {
+        Some(v) if !v.trim().is_empty() => (Some(v.trim()), slots.next()?.trim()),
+        _ => (None, first),
+    };
     let model = slots.next()?.trim();
     if !matches!(thread, "main thread" | "subagent") || model.is_empty() {
         return None;
@@ -1783,6 +1803,7 @@ pub(crate) fn parse_agent_signature(line: &str) -> Option<AgentSignature<'_>> {
         return None;
     }
     Some(AgentSignature {
+        version,
         model,
         os,
         machine,
@@ -5182,7 +5203,58 @@ mod guard_policy_tests {
             ),
             ("signed", "body-file")
         );
+
+        // Version-first canonical form (added 2026-09-07) is signed too.
+        let versioned = "Jon's Claude (Bram 0.6.5, main thread, Fable 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):\n\nBody.";
+        assert_eq!(
+            verdict(&format!("gh issue comment 5 --body \"{}\"", versioned)),
+            "signed"
+        );
+
         let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn parse_agent_signature_version_slot() {
+        // (a) new canonical form: version leads the parenthetical.
+        let sig = parse_agent_signature(
+            "Jon's Claude (Bram 0.6.5, main thread, Fable 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):",
+        )
+        .expect("versioned signature should parse");
+        assert_eq!(sig.version, Some("0.6.5"));
+        assert_eq!(sig.model, "Fable 5");
+        assert_eq!(sig.os, Some("macOS"));
+        assert_eq!(sig.machine, Some("Tuck"));
+        assert_eq!(sig.project, "Bram");
+        assert_eq!(sig.locator, "github.com/judell/bram");
+
+        // (b) old five-slot form (no version) still parses, version None.
+        let sig = parse_agent_signature(
+            "Jon's Claude (main thread, Fable 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):",
+        )
+        .expect("five-slot signature should parse");
+        assert_eq!(sig.version, None);
+        assert_eq!(sig.model, "Fable 5");
+        assert_eq!(sig.os, Some("macOS"));
+        assert_eq!(sig.machine, Some("Tuck"));
+
+        // (c) old two-slot form still parses, version None.
+        let sig = parse_agent_signature(
+            "Jon's Claude (main thread, Opus 5) speaking from the Bram project (github.com/judell/bram):",
+        )
+        .expect("two-slot signature should parse");
+        assert_eq!(sig.version, None);
+        assert_eq!(sig.model, "Opus 5");
+        assert_eq!(sig.os, None);
+        assert_eq!(sig.machine, None);
+
+        // (d) "Bramble 5" is not a version — the exact "Bram " prefix is
+        // required — so it's read as the thread slot, fails thread
+        // validation, and the whole parse fails.
+        assert!(parse_agent_signature(
+            "Jon's Claude (Bramble 5, main thread, Fable 5) speaking from the Bram project (github.com/judell/bram):",
+        )
+        .is_none());
     }
 
     #[test]

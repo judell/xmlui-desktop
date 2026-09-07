@@ -1070,23 +1070,38 @@ was correctly signed. The record was inconsistent along an axis no
 reader cares about. The cross-boundary case is a subset of the problem,
 and it was mistaken for the whole of it.
 
-**The form.** One canonical opener, eight slots, all load-bearing —
-*whose* agent, *which* agent, *which thread*, *which model*, *which
-platform*, *which machine*, the familiar project name, and the exact
-repository that anchors the speaker's evidence:
+**The form.** One canonical opener, nine slots, all load-bearing —
+*which build*, *whose* agent, *which* agent, *which thread*, *which
+model*, *which platform*, *which machine*, the familiar project name,
+and the exact repository that anchors the speaker's evidence:
 
-    <owner>'s <Agent> (<thread>, <model>, <os>, <machine>) speaking from the <Project> project (<forge-host>/<owner-or-group>/<repo>):
+    <owner>'s <Agent> (Bram <version>, <thread>, <model>, <os>, <machine>) speaking from the <Project> project (<forge-host>/<owner-or-group>/<repo>):
 
-`<thread>` is `main thread` or `subagent`; `<model>` names the model
-producing the words; `<os>` names the host platform — `macOS`, `Windows`,
-or `Linux` (finer detail like a distro is allowed, not required);
-`<machine>` is the host's short hostname (`hostname -s`; `COMPUTERNAME` on
-Windows). This project's instances:
+`<version>` is Bram's own version and leads the parenthetical — it is
+first because "which build?" is the question a reader asks before any
+other triage step, and a version-less report is expensive to place after
+the fact: judell/bram#343 and #362 are both field cases where the
+absence of a version cost real archaeology to reconstruct which build a
+report came from. A running instance reads its version from
+`GET /__app-info` (`current`); a managed project without a live instance
+reachable reads the `<!-- bram vX.Y.Z -->` marker on the first line of
+`.claude/bram-conventions.md`. If neither is reachable, write
+`Bram unknown` rather than guessing. `<thread>` is `main thread` or
+`subagent`; `<model>` names the model producing the words; `<os>` names
+the host platform — `macOS`, `Windows`, or `Linux` (finer detail like a
+distro is allowed, not required); `<machine>` is the host's short
+hostname (`hostname -s`; `COMPUTERNAME` on Windows). This project's
+instances:
 
-    Jon's Claude (main thread, Fable 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):
-    Jon's Claude (subagent, Opus 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):
-    Jon's Claude (main thread, Opus 5, Windows, JON-PC) speaking from the Bram project (github.com/judell/bram):
-    Jon's Codex (main thread, gpt-5.2-codex, macOS, Tuck) speaking from the XMLUI project (github.com/xmlui-org/xmlui):
+    Jon's Claude (Bram 0.6.5, main thread, Fable 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):
+    Jon's Claude (Bram 0.6.5, subagent, Opus 5, macOS, Tuck) speaking from the Bram project (github.com/judell/bram):
+    Jon's Claude (Bram 0.6.5, main thread, Opus 5, Windows, JON-PC) speaking from the Bram project (github.com/judell/bram):
+    Jon's Codex (Bram 0.6.5, main thread, gpt-5.2-codex, macOS, Tuck) speaking from the XMLUI project (github.com/xmlui-org/xmlui):
+
+Older signature forms (no version slot, or no os/machine slots) remain
+valid historical text, and — same soft rollout as the #346 os/machine
+slots — the guards do not yet enforce this slot's presence on a new
+write; they parse it when present and leave it optional otherwise.
 
 The repository locator is the checkout's `origin`, normalized to
 `host/path`: omit the scheme, credentials, trailing slash, and `.git`.
@@ -1099,16 +1114,18 @@ across forks, mirrors, same-named repositories, and forge providers.
 A form that names only the project ("from the xmlui side") leaves "who
 is speaking" unanswered, which is the half that matters when two agents
 work the same thread. Across a boundary the third slot also answers
-*which side the evidence comes from*. The first two parenthetical slots
-(added 2026-08-28, when multi-agent orchestration made them
-unrecoverable otherwise) answer *evidential standing* — an
-orchestrator holds the design discussion, a delegated subagent saw
-only its brief — and *attribution*: judgment quality belongs to the
-model that produced the words, and heavy passes routinely run on a
-different model than the main loop. The third and fourth, `<os>` and
-`<machine>` (both added 2026-09-05, judell/bram#346), answer *which
-machine*: two sessions of the same owner's same agent coordinating
-across platforms render otherwise-identical signatures, and the model
+*which side the evidence comes from*. The second and third
+parenthetical slots, `<thread>` and `<model>` (added 2026-08-28, when
+multi-agent orchestration made them unrecoverable otherwise — the
+version slot leading the parenthetical is newer still, see below),
+answer *evidential standing* — an orchestrator holds the design
+discussion, a delegated subagent saw only its brief — and
+*attribution*: judgment quality belongs to the model that produced the
+words, and heavy passes routinely run on a different model than the
+main loop. The fourth and fifth, `<os>` and `<machine>` (both added
+2026-09-05, judell/bram#346), answer *which machine*: two sessions of
+the same owner's same agent coordinating across platforms render
+otherwise-identical signatures, and the model
 name doesn't reliably distinguish them — on #346 every participant read
 "Jon's Claude … (github.com/judell/bram)" and the thread was illegible.
 The hostname slot also makes the signature machine-READABLE provenance:

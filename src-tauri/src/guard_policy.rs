@@ -731,6 +731,91 @@ fn shell_arg_after(c: &[char], i: usize) -> Option<String> {
     }
 }
 
+// --- inline `node -e` content test (#362) -----------------------------------
+
+/// Write/side-effect indicators inside an inline Node script. Same
+/// deliberately-conservative posture as PY_WRITE_HINTS: `require(` and
+/// `import` catch every module that could reach the filesystem or spawn a
+/// process, network clients count as side effects (matching python's
+/// urllib/requests/socket entries), so the carve-out covers only scripts
+/// that plainly touch nothing — Walt's `console.log(1+1)` class (#362).
+const NODE_WRITE_HINTS: &[&str] = &[
+    "require(",
+    "import(",
+    "import ",
+    "fs.",
+    "child_process",
+    "writeFile",
+    "appendFile",
+    "createWriteStream",
+    ".unlink",
+    ".rmdir",
+    ".mkdir",
+    ".rename",
+    ".truncate",
+    ".chmod",
+    ".symlink",
+    ".copyFile",
+    "execSync",
+    "spawnSync",
+    "spawn(",
+    "exec(",
+    "fetch(",
+    "http.",
+    "https.",
+    "net.",
+    "WebSocket",
+    "process.binding",
+    "Deno.",
+    "Bun.",
+];
+
+/// `(^|[\s;&|`(])node\s+-e\b`. Returns the index just past `-e`.
+fn node_dash_e_positions(c: &[char]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for i in 0..c.len() {
+        if !at_boundary(c, i) {
+            continue;
+        }
+        let Some(j) = lit(c, i, "node") else { continue };
+        let Some(j) = ws1(c, j) else { continue };
+        if let Some(k) = lit(c, j, "-e") {
+            if word_end(c, k) {
+                out.push(k);
+            }
+        }
+    }
+    out
+}
+
+/// #362: `node -e` used to classify as a write by the FLAG alone, denying
+/// pure-expression one-liners (`node -e "console.log(1+1)"` — Walt's
+/// confirmed false positive). Mirror of python_dash_c_writes: read the
+/// inline script; no write indicator → not a write via this pattern.
+/// Unreadable, expansion-bearing, or hint-carrying scripts stay writes —
+/// ambiguity degrades to over-denying, never under-denying.
+fn node_dash_e_writes(command: &str) -> bool {
+    let c = chars(command);
+    let positions = node_dash_e_positions(&c);
+    if positions.is_empty() {
+        return false;
+    }
+    for p in positions {
+        match shell_arg_after(&c, p) {
+            None => return true,
+            Some(script) => {
+                if script.contains('$') || script.contains('`') {
+                    return true;
+                }
+                if NODE_WRITE_HINTS.iter().any(|h| script.contains(h)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// #299 (case 2): the Python guard treats the mere presence of `python -c` as
 /// a write. Here the inline script is read: if it can be extracted and carries
 /// no write indicator, the command is not a write via this pattern. When the
@@ -961,6 +1046,12 @@ fn write_patterns_token(command: &str, skip: SkipPattern) -> Option<String> {
     if python_dash_c_writes(command) {
         return Some("python -c".to_string());
     }
+    // #362: node -e joins python -c as body-inspected (raw command — the
+    // quoted script is exactly what it reads), replacing the flag-alone
+    // classification below that denied pure-expression one-liners.
+    if node_dash_e_writes(command) {
+        return Some("node -e".to_string());
+    }
     let masked_owned = mask_quoted_spans(command);
     let scan: &str = masked_owned.as_deref().unwrap_or(command);
     let c = chars(scan);
@@ -988,9 +1079,6 @@ fn write_patterns_token(command: &str, skip: SkipPattern) -> Option<String> {
     }
     if skip != SkipPattern::GhIssueWrite && gh_issue_write(&c) {
         return Some("gh issue <write-verb>".to_string());
-    }
-    if cmd_flag(&c, "node", "-e") {
-        return Some("node -e".to_string());
     }
     if cmd_flag(&c, "bash", "-c") {
         return Some("bash -c".to_string());
@@ -4413,6 +4501,10 @@ mod guard_policy_tests {
             "perl -i -pe s/a/b/ file.txt",
             "python -c \"open('x', 'w').write('x')\"",
             "node -e \"require('fs').writeFileSync('x','x')\"",
+            // #362: the conservative refusals the body inspector keeps —
+            // expansion means the guard's text is not what node runs.
+            "node -e \"console.log($HOME)\"",
+            "node -e 'fetch(\"https://x.test\")'",
             "git commit -m test",
             "git push",
             "gh issue close 119 --repo judell/bram",
@@ -4437,6 +4529,12 @@ mod guard_policy_tests {
             "ls -la",
             "rg Bash app/provider-hooks/claude-worklist-guard.py",
             "git status --short",
+            // #362: Walt's confirmed false-positive class — pure-expression
+            // node -e one-liners read nothing and print.
+            "node -e \"console.log(1+1)\"",
+            "node -e 'console.log(JSON.stringify({a: 1}))'",
+            "git stash list",
+            "git status --porcelain | grep modified",
             "gh issue view 119 --repo judell/bram",
             "python --version",
             "curl -I https://example.com",

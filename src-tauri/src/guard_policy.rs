@@ -1554,7 +1554,8 @@ pub(crate) fn expected_repo_locator(cwd: &Path) -> Option<String> {
 // the sweep can classify same-account comments exactly). Older two- and
 // three-slot signatures parse with the trailing fields None.
 pub(crate) struct AgentSignature<'a> {
-    pub(crate) thread: &'a str,
+    // The thread slot ("main thread" | "subagent") is validated by the parser
+    // but not stored: no consumer reads it yet. Re-add the field when one does.
     pub(crate) model: &'a str,
     pub(crate) os: Option<&'a str>,
     pub(crate) machine: Option<&'a str>,
@@ -1593,7 +1594,6 @@ pub(crate) fn parse_agent_signature(line: &str) -> Option<AgentSignature<'_>> {
         return None;
     }
     Some(AgentSignature {
-        thread,
         model,
         os,
         machine,

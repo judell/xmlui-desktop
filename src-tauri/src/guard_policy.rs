@@ -2574,6 +2574,21 @@ fn mcp_branch(payload: &Value, tool_name: &str) -> ShadowVerdict {
     let cwd_s = cwd.to_string_lossy().to_string();
     let candidates = mcp_paths(&ti);
     if candidates.is_empty() {
+        // issue-360: a name-classified "mutation" with no extractable path is
+        // usually not a repo mutation at all (external connectors — Drive
+        // create_file, Calendar create_event — carry no path key), but it can
+        // also be a filesystem-shaped tool whose input key MCP_PATH_KEYS
+        // doesn't know. So the default stays fail-closed, and the user's
+        // explicit authorizations are consulted first instead of being
+        // unreachable: the Skip worklist button's wildcard direct-edit grant,
+        // then the "just do it" prose opt-out. Target carries the tool name
+        // so the trace names what was released.
+        if fresh_bypass(&project_root, "*") {
+            return allow("mcp-no-path-bypass", tool_name);
+        }
+        if let Some(msg) = opt_out_clears(&project_root, payload) {
+            return opt_out_allow("opt-out-phrase", tool_name, &msg);
+        }
         // python:2131-2144. Python's trace target here is the empty string.
         return deny_msg(
             "mcp-unrecognized-input",
@@ -2582,7 +2597,7 @@ fn mcp_branch(payload: &Value, tool_name: &str) -> ShadowVerdict {
             "",
             &cwd_s,
             &format!(
-                "{tool} blocked: this looks like a mutation, but the guard could not extract any file path from tool_input.\nPropose the change in resources/worklist.json first, or extend claude-worklist-guard.py to recognize this tool's input shape.",
+                "{tool} blocked: this looks like a mutation, but the guard could not extract any file path from tool_input.\nIf this tool does not modify repository files (an external connector, for example), the user can authorize it by ending their message with \"just do it\" or clicking the Skip worklist button.\nOtherwise propose the change in resources/worklist.json first, or extend MCP_PATH_KEYS (src-tauri/src/guard_policy.rs) to recognize this tool's input shape.",
                 tool = tool_name
             ),
         );
@@ -4157,11 +4172,21 @@ fn codex_mcp_branch(
     }
     let candidates = mcp_paths(tool_input);
     if candidates.is_empty() {
+        // issue-360: same shape as the Claude branch above — consult the
+        // wildcard direct-edit grant (Codex's "just do it" and Skip worklist
+        // both land there via the host's toTurn path) before the fail-closed
+        // deny. Codex has no transcript opt-out at PreToolUse by design.
+        if codex_fresh_bypass(cwd, "*") {
+            return codex_allow("mcp-no-path-bypass", tool_name);
+        }
         return codex_deny(
             &format!(
                 "{} blocked: looks like a mutation but the guard could not extract \
-any file path from tool_input. Propose the change in resources/worklist.json \
-first, or extend codex-worklist-guard.py to recognize this MCP tool's input shape.",
+any file path from tool_input. If this tool does not modify repository files (an \
+external connector, for example), the user can authorize it by ending their \
+message with \"just do it\" or clicking the Skip worklist button. Otherwise \
+propose the change in resources/worklist.json first, or extend MCP_PATH_KEYS \
+(src-tauri/src/guard_policy.rs) to recognize this MCP tool's input shape.",
                 tool_name
             ),
             "-",
@@ -5580,6 +5605,70 @@ mod guard_policy_tests {
         assert!(full_shas("deadbeef").is_empty());
     }
 
+    // issue-360: a name-classified MCP "mutation" with no extractable path
+    // (external connectors — Drive create_file, Calendar create_event) honors
+    // the user's explicit opt-outs; without one, the fail-closed deny stands.
+    #[test]
+    fn mcp_zero_path_honors_opt_outs() {
+        let root = scratch("mcp360");
+        std::fs::create_dir_all(root.join("resources")).unwrap();
+        std::fs::write(root.join(AUTH_REL), "{}").unwrap();
+
+        let payload = serde_json::json!({
+            "tool_name": "mcp__claude_ai_Google_Drive__create_file",
+            "tool_input": {"title": "x", "textContent": "y"},
+            "cwd": root.to_string_lossy(),
+        });
+
+        // No grant, no opt-out: fail-closed.
+        let v = shadow_worklist_decision("claude-rs", &payload).unwrap();
+        assert_eq!(
+            (v.decision.as_str(), v.reason.as_str()),
+            ("deny", "mcp-unrecognized-input")
+        );
+
+        // Fresh wildcard direct-edit grant (Skip worklist): released, and the
+        // trace target names the released tool.
+        write_auth(&root, "direct-edit", &["*"], 0.0);
+        let v = shadow_worklist_decision("claude-rs", &payload).unwrap();
+        assert_eq!(
+            (v.decision.as_str(), v.reason.as_str()),
+            ("allow", "mcp-no-path-bypass")
+        );
+        assert_eq!(v.target, "mcp__claude_ai_Google_Drive__create_file");
+
+        // Stale grant: deny again.
+        write_auth(&root, "direct-edit", &["*"], BYPASS_TTL_MS + 60_000.0);
+        let v = shadow_worklist_decision("claude-rs", &payload).unwrap();
+        assert_eq!(
+            (v.decision.as_str(), v.reason.as_str()),
+            ("deny", "mcp-unrecognized-input")
+        );
+
+        // "just do it" prose opt-out: released, with the audit turn key set
+        // (drives the direct-edit breadcrumb dedup).
+        std::fs::write(root.join(AUTH_REL), "{}").unwrap();
+        let tp = transcript(&root, "m360", "create the event, just do it");
+        let v = shadow_worklist_decision(
+            "claude-rs",
+            &serde_json::json!({
+                "tool_name": "mcp__claude_ai_Google_Calendar__create_event",
+                "tool_input": {"summary": "lunch"},
+                "cwd": root.to_string_lossy(),
+                "transcript_path": tp,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            (v.decision.as_str(), v.reason.as_str()),
+            ("allow", "opt-out-phrase")
+        );
+        assert_eq!(v.target, "mcp__claude_ai_Google_Calendar__create_event");
+        assert!(v.audit_turn_key.is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // --- authority-mode deny-message parity (bram-guard-authority-flip) -----
     //
     // Shadow mode ignores ShadowVerdict::message; authority mode prints it as
@@ -5872,7 +5961,7 @@ mod guard_policy_tests {
         assert_eq!(v.reason, "mcp-unrecognized-input");
         assert_eq!(
             body_of(&v),
-            "mcp__fs__write_file blocked: this looks like a mutation, but the guard could not extract any file path from tool_input.\nPropose the change in resources/worklist.json first, or extend claude-worklist-guard.py to recognize this tool's input shape."
+            "mcp__fs__write_file blocked: this looks like a mutation, but the guard could not extract any file path from tool_input.\nIf this tool does not modify repository files (an external connector, for example), the user can authorize it by ending their message with \"just do it\" or clicking the Skip worklist button.\nOtherwise propose the change in resources/worklist.json first, or extend MCP_PATH_KEYS (src-tauri/src/guard_policy.rs) to recognize this tool's input shape."
         );
         // Python's trace target on this one branch is the empty string.
         assert!(
@@ -6996,6 +7085,29 @@ resources/worklist.json has no proposed"
             "reason: {}",
             v.reason
         );
+
+        // issue-360: a fresh wildcard direct-edit grant (snake_case
+        // issued_at_ms — the only spelling the Codex arm reads) releases the
+        // zero-path deny; the trace target names the released tool.
+        std::fs::write(
+            root.join(DIRECT_EDIT_REL),
+            serde_json::json!({
+                "kind": "direct-edit", "paths": ["*"], "issued_at_ms": now_ms()
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let v = decide(
+            &root,
+            "mcp__filesystem__write_file",
+            serde_json::json!({"contents": "x"}),
+        );
+        assert_eq!(
+            (v.decision.as_str(), v.reason.as_str()),
+            ("allow", "mcp-no-path-bypass")
+        );
+        assert_eq!(v.target, "mcp__filesystem__write_file");
+        std::fs::remove_file(root.join(DIRECT_EDIT_REL)).unwrap();
 
         let v = decide(
             &root,

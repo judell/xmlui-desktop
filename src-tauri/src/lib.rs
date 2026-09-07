@@ -17208,6 +17208,82 @@ fn record_skip_worklist_authorization<R: tauri::Runtime>(app: &AppHandle<R>, tur
     }
 }
 
+// footer-says-proposing-new-item: transient host-side signal that the agent
+// is authoring a new worklist item, so the footer context line can say
+// "Proposing a new item…" during the otherwise-silent stretch before any
+// claim or selection exists. 0 = not set; a non-zero value is the set-time
+// in unix ms, checked against PROPOSING_TTL_MS on every clear attempt.
+static PROPOSING_SET_AT_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+const PROPOSING_TTL_MS: i64 = 10 * 60 * 1000;
+// The turn-finished clearer ignores end-records observed this soon after the
+// set — they are echoes of the PRIOR turn's ending, re-surfaced when the
+// proposal turn's own submission touches the JSONL (236ms in the field).
+const PROPOSING_TURN_END_GRACE_MS: i64 = 10 * 1000;
+
+/// Detect the propose-intent phrase ("propose a worklist item", case-
+/// insensitive substring) on the toTurn write path and set the transient
+/// proposing flag. Same chokepoint as the other prefix/phrase detectors
+/// below — runs on the raw pre-framing text. Cleared by whichever comes
+/// first: the worklist changing on disk (clear_proposing_flag call in the
+/// watcher), the turn finishing (clear_proposing_flag call in
+/// check_jsonl_for_turn_end), or the TTL lapsing (checked lazily inside
+/// clear_proposing_flag itself — there is no ticker).
+fn record_proposing_intent<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    if !turn_text.to_lowercase().contains("propose a worklist item") {
+        return;
+    }
+    PROPOSING_SET_AT_MS.store(unix_now_ms(), std::sync::atomic::Ordering::Relaxed);
+    if bram_trace_enabled() {
+        append_bram_trace_line(app, "proposing", "op=set");
+    }
+    let _ = app.emit("proposing-changed", serde_json::json!({"proposing": true}));
+}
+
+/// Clear the proposing flag if it is set, tracing and emitting only on a
+/// real transition (a no-op clear — flag already unset — is silent). When
+/// the flag has outlived PROPOSING_TTL_MS by the time this runs, the trace
+/// records `cause=ttl` regardless of the caller's `cause`, since the flag
+/// is functionally expired either way.
+fn clear_proposing_flag<R: tauri::Runtime>(app: &AppHandle<R>, cause: &str) {
+    // Grace floor for the turn-finished cause (field conviction, first live
+    // run: op=set → op=clear cause=turn-finished in 236ms — the detector
+    // re-observed the PREVIOUS turn's genuine end record the moment the
+    // proposal turn's submission touched the JSONL, so the newborn flag was
+    // killed by an echo). A real proposal turn cannot finish this fast; a
+    // real nothing-to-propose ending clears at its actual turn end, and the
+    // TTL bounds everything else.
+    if cause == "turn-finished" {
+        let set_at = PROPOSING_SET_AT_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if set_at != 0 && unix_now_ms().saturating_sub(set_at) < PROPOSING_TURN_END_GRACE_MS {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "proposing",
+                    "op=clear-skip cause=turn-finished-within-grace",
+                );
+            }
+            return;
+        }
+    }
+    let prev = PROPOSING_SET_AT_MS.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if prev == 0 {
+        return;
+    }
+    let effective_cause = if unix_now_ms().saturating_sub(prev) > PROPOSING_TTL_MS {
+        "ttl"
+    } else {
+        cause
+    };
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "proposing",
+            &format!("op=clear cause={}", effective_cause),
+        );
+    }
+    let _ = app.emit("proposing-changed", serde_json::json!({"proposing": false}));
+}
+
 fn write_pty_turn_intent<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, AppState>,
@@ -17218,6 +17294,7 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
     record_codex_direct_edit_authorization(app, data);
     record_iterate_inflight_sentinel(app, data);
     record_skip_worklist_authorization(app, data);
+    record_proposing_intent(app, data);
     // Envelope switch (docs/turn-transport-redesign.md step 6): substantial
     // or image-bearing sends are persisted as an outbound-turn envelope and
     // the PTY carries only a compact frame. Inline sends get the whitespace
@@ -42267,6 +42344,10 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                     }
                 } else {
                     kill_current_claude_turn_with_finished(app, verb, elapsed);
+                    // footer-says-proposing-new-item: a genuine (non-stale)
+                    // turn end is one of the flag's clear triggers,
+                    // independent of whether an inflight claim exists.
+                    clear_proposing_flag(app, "turn-finished");
                 }
             }
             JsonlCompletionProvider::Codex => {
@@ -42278,6 +42359,7 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                     );
                 }
                 agent_status_emit_finished(app, provider_label, None, None, "jsonl-end-turn");
+                clear_proposing_flag(app, "turn-finished");
             }
         }
     }
@@ -60115,6 +60197,11 @@ pub fn run() {
                         if since.elapsed() >= worklist_debounce {
                             eprintln!("[watcher] change detected, emitting worklist-changed (debounced)");
                             emit_replayable_signal(&app_handle, "worklist-changed");
+                            // footer-says-proposing-new-item: the worklist
+                            // actually changing on disk is one of the flag's
+                            // clear triggers — the item the agent was
+                            // authoring just landed.
+                            clear_proposing_flag(&app_handle, "worklist-changed");
                             // Event-driven indexing: worklist-history files are
                             // written on commit/prune — reindex history now.
                             search_index_request(IndexBucket::History);

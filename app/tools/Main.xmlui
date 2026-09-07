@@ -819,14 +819,20 @@
                width-constrained container —
                xmlui.org/docs/howto/wrap-long-text-in-a-link). -->
           <PushSource id="footerSel" initial="{[]}" subscribe="{window.bramSubscribeW2Selection()}" />
-          <HStack width="*" verticalAlignment="center">
+          <!-- footer-says-proposing-new-item: no boot-state route by design —
+               a missed proposing-changed event just degrades to today's
+               silence until the next set/clear. `false` skips the
+               /__event/latest replay fetch that other PushSources use for
+               boot recovery (see bramSubscribeTauriEvent in helpers.js). -->
+          <PushSource id="footerProposing" initial="{null}" subscribe="{window.bramSubscribeTauriEvent('proposing-changed', false)}" />
+          <HStack width="*" verticalAlignment="center" var.footerProposingFlag="{!!(footerProposing.value &amp;&amp; footerProposing.value.payload &amp;&amp; footerProposing.value.payload.proposing)}">
             <Text
-              when="{!!window.__bramFooterContextLine(headerInflightClaim.value, footerSel.value)}"
+              when="{!!window.__bramFooterContextLine(headerInflightClaim.value, footerProposingFlag, footerSel.value)}"
               width="100%"
               fontSize="$fontSize-md"
               fontStyle="italic"
               color="$color-primary-600"
-              value="{window.__bramFooterContextLine(headerInflightClaim.value, footerSel.value)}" />
+              value="{window.__bramFooterContextLine(headerInflightClaim.value, footerProposingFlag, footerSel.value)}" />
           </HStack>
         </HStack>
         <!-- switch-to-transcript-on-action: the indexing status moved to the

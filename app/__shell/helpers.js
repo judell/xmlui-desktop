@@ -2409,6 +2409,10 @@ window.__bramInflightBannerLabel = function (claim) {
 //   "Selected in Worklist: a, b"            — selection, idle
 //   "Selected in Worklist: a (Refining…)"   — claim live (claim ids win;
 //     the gate clears the selection at submit, so the claim is the truth)
+//   "Proposing a new item…"                 — no claim yet, but the agent is
+//     authoring a new item (footer-says-proposing-new-item; middle case,
+//     between claim and selection — a claim or selection, once real, still
+//     wins over it)
 // Empty when neither, so the slot reserves space silently.
 // switch-to-transcript-on-action: the new-below chip pulses gently while
 // unseen content waits AND the agent is done — the beep's visual twin,
@@ -2420,15 +2424,22 @@ window.__bramChipShouldPulse = function (status) {
   return !(status && status.state === "working");
 };
 
-window.__bramFooterContextLine = function (claim, sel) {
+// Round 2 (Jon, from the field): COMPOSE the facts, don't choose one —
+// "Selected in Worklist: a, b · Proposing a new item…" when both hold.
+window.__bramFooterContextLine = function (claim, proposing, sel) {
+  var parts = [];
   var ids = (claim && claim.ids) || [];
-  if (ids.length) {
-    return "Selected in Worklist: " + ids.join(", ") +
-      " (" + window.__bramClaimVerb(claim.kind, claim.statusLabel) + "…)";
-  }
   var selection = sel || [];
-  if (selection.length) return "Selected in Worklist: " + selection.join(", ");
-  return "";
+  if (ids.length) {
+    parts.push(
+      "Selected in Worklist: " + ids.join(", ") +
+        " (" + window.__bramClaimVerb(claim.kind, claim.statusLabel) + "…)"
+    );
+  } else if (selection.length) {
+    parts.push("Selected in Worklist: " + selection.join(", "));
+  }
+  if (proposing) parts.push("Proposing a new item…");
+  return parts.join(" · ");
 };
 
 // issue-265: the per-item indicator's kind, resolved from ONE source with a

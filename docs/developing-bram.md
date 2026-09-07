@@ -490,14 +490,19 @@ absolutely the way to develop."
 
 ### The loop
 
-- **Stand up a second full Bram** against a scratch fixture
-  (`./bram <scratch>`) — the startup-dance second-instance pattern
-  generalized past startup. The fixture's `resources/worklist.json`,
-  `resources/.claim-intervals.json`, and `refs/bram/claims/*` are
-  hand-built to display *every* state the change must handle **on one
-  board**. For interval staging that was a disjoint entanglement, a
-  supersession, a wrong-order dependency, and an unentangled solo, all
-  present at once — the range a scripted test would cover one case per
+- **Stand up a second full Bram** with the standard synthetic fixture:
+
+  ```sh
+  scripts/demo-instance.sh new full-board --from all
+  scripts/demo-instance.sh launch
+  ```
+
+  This is the startup-dance second-instance pattern generalized past
+  startup. The generated fixture's `resources/worklist.json`,
+  `resources/.claim-intervals.json`, and `refs/bram/claims/*` display
+  disjoint entanglement, a true dependency, supersession, unattributed
+  work, many simultaneous claimants, and an expired authorization **on
+  one board** — the range a scripted test would cover one case per
   assertion, laid out for the eye simultaneously.
 - **The human drives it as a clueless user** — clicking around,
   misclicking, hitting real states. This is the fuzzer. It finds what
@@ -515,9 +520,13 @@ absolutely the way to develop."
   establishes, turned into a development cadence. Edit → reload → look →
   refine, tightened to the length of a reload. (Rust still
   rebuilds+relaunches; the pane does not.)
-- **Reset to baseline on one word.** Keep the fixture's baseline as a
-  snapshot (HEAD + claim refs + `resources/` sidecars); reset restores
-  it so each probe starts clean.
+- **Save or reset on one word.** `scripts/demo-instance.sh capture
+  <name>` parks a stumbled-into state as `scenario/<name>`;
+  `scripts/demo-instance.sh reset` rehydrates the active scenario byte
+  for byte, including its claim refs and ignored scenario-owned
+  `resources/` sidecars, while preserving the running instance's port
+  and trace files. Each probe can start clean without throwing away a
+  finding.
 
 ### Why it's the way, not a technique
 
@@ -558,17 +567,74 @@ human drove an instrumented instance.
 
 ### Institutionalization (#339)
 
-`scripts/demo-instance.sh` builds synthetic starters and hydrates them;
-the durable scenario library is **git branches** (`scenario/<name>`),
+`scripts/demo_instance.py` is the platform-neutral fixture engine;
+`scripts/demo-instance.sh` and `scripts/demo-instance.ps1` are the thin
+platform launchers. The default fixture lives beside this checkout at
+`../bram-demo-instance`; put `--repo <path>` before the verb to use a
+different location. The useful verbs are:
+
+| verb | effect |
+|---|---|
+| `new <name> --from <starter>` | create and hydrate a scenario; repeat `--from`, or use `--from all` |
+| `use <name>` | discard the live probe and hydrate `scenario/<name>` exactly |
+| `add <starter>` | add another synthetic state to the live board; it is temporary until captured |
+| `capture <name>` | park the current worktree, worklist sidecars, and claim boundaries as a scenario |
+| `reset` | rehydrate the active scenario |
+| `status [--json]` | report scenarios, active state, item/ref counts, PID, and log path |
+| `launch` / `stop` | start the real binary or stop only its recorded PID |
+
+The starter names are `disjoint-entanglement`, `dependency`,
+`supersession`, `unattributed`, `many-claimants`, and
+`expired-authorization`. For example, a focused board is:
+
+```sh
+scripts/demo-instance.sh new ordering \
+  --from disjoint-entanglement \
+  --from dependency
+scripts/demo-instance.sh launch
+tail -f ../bram-demo-instance/resources/bram-traces/bram-trace.log
+# Human explores; agent reads the trace.
+scripts/demo-instance.sh capture ordering-found-cancel-gap
+scripts/demo-instance.sh reset
+scripts/demo-instance.sh stop
+```
+
+On Windows, use the same verbs through
+`scripts\demo-instance.ps1`. Run the established `build.ps1` from a VS
+Developer PowerShell first. The launcher refuses a debug binary older
+than HEAD or a half-build where `bram-guard.exe` is newer than a locked
+`bram.exe`; it names existing Bram PIDs rather than killing them. On
+every launch it verifies a directory junction named `app` beside the
+target-triple debug executable, pointing at this checkout's `app/`.
+That is the Windows disk-serving equivalent of Unix's repo-root
+`./bram` symlink: no privileged symlink, and no hardlink left stale when
+Cargo replaces the executable. If this workflow changes on macOS/Linux,
+its automated launcher smoke runs here; if it changes on Windows, run
+the corresponding PowerShell launch smoke on Windows before calling it
+done.
+
+Both launchers delegate process creation to the shared engine, which
+also refuses a binary older than this checkout's HEAD. It
+captures stdout/stderr under the demo repo's git directory, records the
+exact child PID, enables tracing, and removes
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
+`CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_ENTRYPOINT`, and
+`CLAUDE_CODE_EXECPATH`. A nested demo agent therefore saves its own
+transcript instead of mistaking itself for the parent session.
+
+The durable scenario library is **git branches** (`scenario/<name>`),
 strictly more powerful than regenerate-from-script because a branch
 captures real *stumbled-into* states, not only synthesized ones — the
-externalized-context principle applied to fixtures. A parked scenario
-is a git object you can bisect, blame, diff, and hand to another
-machine. One wrinkle shapes the verbs: the board reads *uncommitted*
-work, so "using" a branch is checkout **plus** a small
-`git reset --mixed <boundary>` hydrate that moves the pending-work
-commit back into the dirty worktree; claim refs coexist across
-scenarios because each boundary's `atMs` id is unique.
+externalized-context principle applied to fixtures. A scenario branch
+retains the clean boundary, every claim tree, and the pending-work tree
+in one commit ancestry. `use` checks out its tip detached, performs
+`git reset --mixed <boundary>` so Bram sees pending work, and recreates
+only that scenario's `refs/bram/claims/*`. The generated repository has
+a conspicuous marker and no remote; every destructive verb verifies
+both facts and the exact git toplevel before acting. Transfer a scenario
+branch with ordinary Git plumbing (for example, a bundle), but never add
+an upstream to the disposable instance.
 
 ### Relationship to the scripted sections
 

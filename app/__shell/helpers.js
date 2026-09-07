@@ -797,6 +797,29 @@ window.__bramAgentSwitcherTrace = function (stage, fields) {
 window.__bramAgentSwitcherLabel = function (provider) {
   return String(provider || "").toLowerCase() === "codex" ? "Codex" : "Claude";
 };
+var __bramAgentSwitcherBusy = false;
+var __bramAgentSwitcherBusySubscribers = new Set();
+function __bramPublishAgentSwitcherBusy(value) {
+  __bramAgentSwitcherBusy = !!value;
+  __bramAgentSwitcherBusySubscribers.forEach(function (fn) {
+    try { fn(__bramAgentSwitcherBusy); } catch (e) {
+      console.error("[bramSubscribeAgentSwitcherBusy] subscriber threw:", e);
+    }
+  });
+}
+window.bramSubscribeAgentSwitcherBusy = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    factory = function (emit) {
+      var fire = function (value) { emit(value == null ? __bramAgentSwitcherBusy : !!value); };
+      __bramAgentSwitcherBusySubscribers.add(fire);
+      fire();
+      return function () { __bramAgentSwitcherBusySubscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
 window.__bramWithAgentCommandTimeout = function (promise, label) {
   var timeoutMs = 8000;
   var timeout = new Promise(function (_, reject) {
@@ -822,15 +845,15 @@ window.__bramSwitchAgent = function (provider) {
     throw e;
   });
 };
-window.__bramHandleAgentSwitcherChange = function (next, previous, select, setSwitching, toastApi) {
+window.__bramHandleAgentSwitcherChange = function (next, previous, select, toastApi) {
   var key = String(next || "").toLowerCase() === "codex" ? "codex" : (String(next || "").toLowerCase() === "claude" ? "claude" : "");
   var prev = String(previous || "").toLowerCase() === "codex" ? "codex" : "claude";
   window.__bramAgentSwitcherTrace("change", { next: key, previous: prev, hasSelect: !!select });
   if (!key || key === prev) return;
-  if (typeof setSwitching === "function") setSwitching(true);
+  __bramPublishAgentSwitcherBusy(true);
   window.__bramSwitchAgent(key).then(function () {
     window.__bramAgentSwitcherTrace("complete", { provider: key });
-    if (typeof setSwitching === "function") setSwitching(false);
+    __bramPublishAgentSwitcherBusy(false);
   }).catch(function (e) {
     window.__bramAgentSwitcherTrace("revert", {
       provider: key,
@@ -838,7 +861,7 @@ window.__bramHandleAgentSwitcherChange = function (next, previous, select, setSw
       error: String((e && e.message) || e),
     });
     if (select && typeof select.setValue === "function") select.setValue(prev);
-    if (typeof setSwitching === "function") setSwitching(false);
+    __bramPublishAgentSwitcherBusy(false);
     try {
       if (toastApi && typeof toastApi.error === "function") {
         toastApi.error("Could not switch agent: " + String((e && e.message) || e));

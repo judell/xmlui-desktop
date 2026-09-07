@@ -1165,6 +1165,105 @@ fn gh_body_at_match(command: &str) -> Option<String> {
 
 // --- cross-boundary signature + SHA verification ----------------------------
 
+// #363: blank heredoc BODIES before the publishing screens (signature,
+// session-url, sha) look for forge-write shapes. Heredoc content is text
+// being written into a file, not command text — Walt's case wrote a draft
+// whose prose mentioned `gh issue create … --body-file <file>`, and the
+// signature scan matched it, then denied on the not-yet-existing body file
+// (#331's unreadable-body rule, correctly load-bearing, aimed at a
+// misparse). Line-based: introducers (`<<TAG`, `<<-TAG`, quoted tags) queue
+// in order, body lines blank until the terminator line, the terminator and
+// all command lines survive. A heredoc that never terminates returns the
+// command UNCHANGED — ambiguity degrades to today's over-denying, never to
+// under-screening. The Bash write classifier's view is deliberately
+// untouched: a heredoc that writes a file still classifies as that write.
+fn mask_heredoc_bodies(command: &str) -> String {
+    if !command.contains("<<") {
+        return command.to_string();
+    }
+    fn introducers(line: &str) -> Vec<(String, bool)> {
+        let c: Vec<char> = line.chars().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < c.len() {
+            if c[i] == '<' && c[i + 1] == '<' {
+                // Not a here-string (<<<) and not the tail of one.
+                if (i + 2 < c.len() && c[i + 2] == '<') || (i > 0 && c[i - 1] == '<') {
+                    i += 1;
+                    continue;
+                }
+                let mut j = i + 2;
+                let dash = j < c.len() && c[j] == '-';
+                if dash {
+                    j += 1;
+                }
+                while j < c.len() && c[j] == ' ' {
+                    j += 1;
+                }
+                let quote = if j < c.len() && (c[j] == '\'' || c[j] == '"') {
+                    let q = c[j];
+                    j += 1;
+                    Some(q)
+                } else {
+                    None
+                };
+                let start = j;
+                while j < c.len() && (c[j].is_ascii_alphanumeric() || c[j] == '_') {
+                    j += 1;
+                }
+                if j > start {
+                    if let Some(q) = quote {
+                        if j < c.len() && c[j] == q {
+                            j += 1;
+                        } else {
+                            i += 1;
+                            continue; // unterminated quoted tag: not an introducer
+                        }
+                    }
+                    out.push((
+                        c[start..]
+                            .iter()
+                            .take(j - start - quote.map_or(0, |_| 1))
+                            .collect::<String>(),
+                        dash,
+                    ));
+                    i = j;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+    let mut masked_lines: Vec<String> = Vec::new();
+    let mut queue: std::collections::VecDeque<(String, bool)> = std::collections::VecDeque::new();
+    for line in command.lines() {
+        if let Some((tag, dash)) = queue.front().cloned() {
+            let candidate = if dash {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            if candidate == tag {
+                queue.pop_front();
+                masked_lines.push(line.to_string());
+            } else {
+                masked_lines.push(" ".repeat(line.chars().count()));
+            }
+            continue;
+        }
+        for intro in introducers(line) {
+            queue.push_back(intro);
+        }
+        masked_lines.push(line.to_string());
+    }
+    if !queue.is_empty() {
+        // Unterminated heredoc: can't tell body from command — fall back.
+        return command.to_string();
+    }
+    masked_lines.join("\n")
+}
+
 const FORGE_WRITE_VERBS: &[&str] = &["create", "comment", "note", "edit", "update", "review"];
 
 fn is_forge_write(command: &str) -> bool {
@@ -1294,6 +1393,8 @@ fn git_commit_message_file_arg(command: &str) -> Option<String> {
 // existing unreadable-body denial — this check never fails open on text it
 // DID read.
 fn session_url_verdict(command: &str, cwd: &Path) -> (&'static str, String) {
+    let masked = mask_heredoc_bodies(command); // #363
+    let command = masked.as_str();
     if !is_git_commit_command(command) && !is_forge_write(command) {
         return ("skip", String::new());
     }
@@ -1717,6 +1818,8 @@ fn crossboundary_signature_verdict(command: &str, cwd: &Path) -> (&'static str, 
     if command.is_empty() {
         return ("skip", "no-command");
     }
+    let masked = mask_heredoc_bodies(command); // #363
+    let command = masked.as_str();
     if !is_forge_write(command) {
         return ("skip", "not-forge-write");
     }
@@ -1763,6 +1866,8 @@ fn forge_sha_verdict(command: &str, cwd: &Path) -> (&'static str, String) {
     if command.is_empty() {
         return ("skip", "no-command".into());
     }
+    let masked = mask_heredoc_bodies(command); // #363
+    let command = masked.as_str();
     if !is_forge_write(command) {
         return ("skip", "not-forge-write".into());
     }
@@ -4999,6 +5104,29 @@ mod guard_policy_tests {
 
         assert_eq!(verdict("gh issue view 12 --repo xmlui-org/xmlui"), "skip");
         assert_eq!(verdict("ls -la"), "skip");
+        // #363: forge-write text INSIDE a heredoc body is content, not a
+        // command — Walt's exact shape (a local draft whose prose says how
+        // to file it later) must not be screened as a forge write.
+        assert_eq!(
+            verdict(
+                "cat > some-draft.md <<'EOF'\n# Draft\n\nTo file later: gh issue create --repo judell/bram --body-file some-draft.md\nEOF"
+            ),
+            "skip"
+        );
+        // The compound write-then-post shape stays covered: the gh half
+        // sits OUTSIDE the heredoc mask, so #331's screening still applies.
+        assert_eq!(
+            verdict(
+                "cat > b.md <<'EOF'\ndraft body\nEOF\ngh issue create --repo judell/bram --body-file b.md"
+            ),
+            "unparsed"
+        );
+        // Unterminated heredoc: body and command can't be separated —
+        // masking falls back to raw text and today's conservative screen.
+        assert_eq!(
+            verdict("cat > c.md <<'EOF'\ngh issue create --repo judell/bram --body-file c.md"),
+            "unparsed"
+        );
         assert_eq!(
             verdict(&format!("gh issue comment 5 --body \"{}\"", unsigned)),
             "unsigned"

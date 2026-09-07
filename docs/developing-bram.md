@@ -12,6 +12,11 @@ repo?* If yes, it belongs in `app/__shell/conventions.md`.
 The rules below are agent-neutral: they bind Claude, Codex, and any
 future provider editing this repo.
 
+For the architectural map of Bram's Git-backed mechanisms—temporary
+indexes, claim and safety refs, selective commits, linked worktrees,
+scenario branches, and remote-tracking state—see
+[`git-as-infrastructure.md`](git-as-infrastructure.md).
+
 ## Code organization (helpers.js / Globals.xs / window)
 
 Iframe-side code spans four surfaces. The rules below describe where

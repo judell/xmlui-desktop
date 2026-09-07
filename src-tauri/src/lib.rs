@@ -13050,6 +13050,31 @@ fn handle_self_update_relaunch<R: tauri::Runtime>(
     if let Some(root) = project_root(Some(app)) {
         cmd.arg(root);
     }
+    // issue-361: detach the child from this dying process. A bare spawn
+    // inherits the controlling terminal, process group, and stdio; for a
+    // terminal-launched instance the parent's exit then leaves the child in
+    // an orphaned background group on that tty, where its first terminal
+    // access draws SIGTTIN/SIGTTOU and POSIX HUPs the stopped orphan group —
+    // it died before its first trace line. Detached launches (Finder, dev
+    // harness) and Windows (no tty job control) never engage that machinery,
+    // which is why testing missed it.
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    let detach = {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+        "process-group"
+    };
+    #[cfg(windows)]
+    let detach = {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        "windows-flags"
+    };
     if let Err(e) = cmd.spawn() {
         return (
             500,
@@ -13060,7 +13085,7 @@ fn handle_self_update_relaunch<R: tauri::Runtime>(
     append_bram_trace_line(
         app,
         "self-update",
-        &format!("op=relaunch target={}", target.display()),
+        &format!("op=relaunch target={} detach={}", target.display(), detach),
     );
     // Let the HTTP response flush before this process exits.
     std::thread::spawn(|| {

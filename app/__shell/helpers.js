@@ -1570,13 +1570,78 @@ window.__bramComposerTargetsSelection = function () {
   return onWorklist && (window.__bramW2Selection || []).length > 0;
 };
 
-window.__bramComposerPlaceholder = function () {
-  var sel = window.__bramW2Selection || [];
-  if (!window.__bramComposerTargetsSelection()) {
-    return "Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot.";
+// switch-to-transcript-on-action: the placeholder IS the addressee label
+// (Jon: "No extra line. We need to reuse the placeholder that we already
+// have."). Claim-aware per the item draft's resolution 1 — work in flight
+// outranks the tab, because the auto-switch relocates the user as a side
+// effect of acting and must not silently re-address their next message.
+// Signal only: authorization behavior is unchanged until this model
+// survives a drive. Args are the caller's reactive deps; each falls back
+// to the window read for any legacy caller.
+// No claim-aware branch here, deliberately (Jon, 2026-09-07): a placeholder
+// that turns into a status message conflates teaching with reporting — the
+// combined footer context line (__bramFooterContextLine) carries in-flight
+// status now, and the placeholder always tells you what Enter will do.
+window.__bramComposerPlaceholder = function (pathname, sel) {
+  var selection = sel || window.__bramW2Selection || [];
+  var route = String(
+    pathname != null ? pathname : (function () { try { return location.hash; } catch (e) { return ""; } })()
+  );
+  // The root route renders the Worklist (and its gate bar) too — Main.xmlui's
+  // gate-bar `when` includes '/', so the buttons-above sentence is true there.
+  var onWorklist = route.indexOf("/worklist") >= 0 || route === "/" || route === "#/";
+  // Feedback elevated to a first-class concept (Jon's spec, 2026-09-07;
+  // the Feedback button retired same day — with a selection, Enter and the
+  // gate buttons all send feedback, so the placeholder carries the
+  // teaching): with a selection the composer IS a feedback box everywhere;
+  // the Worklist wording names the buttons, since there they are. Chat is
+  // the per-message escape. Idle, it chats.
+  if (selection.length > 0) {
+    // Refine retired (same item, later round): Enter IS the feedback-only
+    // verb now, and the gate buttons are pure lifecycle — each sends this
+    // message along WITH its action. The wording teaches that split.
+    if (onWorklist) {
+      return "Feedback about selection: Enter sends it; the buttons above send it with their action. Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot. Chat to talk with the agent about anything.";
+    }
+    return "Feedback about selection: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot. Chat to talk with the agent about anything.";
   }
-  return "Message about " + sel.length + " selected item" + (sel.length === 1 ? "" : "s") +
-    " — the buttons above act on it. Enter still sends to the agent.";
+  return "Chat with agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot.";
+};
+
+// switch-to-transcript-on-action: Feedback as a first-class verb. The
+// composer's Feedback path is the gate's Refine in composer clothing — the
+// same fan-out machinery (__bramWorklist2BatchIterate), the same staged-image
+// markers, the same post-send transcript switch — so "message the items" is
+// one mechanism whichever surface invokes it.
+window.__bramSubmitFeedbackForSelection = function (box) {
+  var sel = (window.__bramW2Selection || []).slice();
+  if (!sel.length) return false;
+  var message = "";
+  try { message = String((box && box.value) || "").trim(); } catch (e) {}
+  if (!message) return false;
+  window.__bramIframeTrace("click", { target: "composer-feedback", op: "act", count: sel.length });
+  var body = window.__bramWithStagedImageMarkers(message, "feedback");
+  window.__bramWorklist2BatchIterate(sel, body);
+  // The selection deliberately SURVIVES a feedback send (Jon's repro,
+  // 2026-09-07: send → auto-switch → return → "found it unselected").
+  // Clearing was inherited from gate-Refine, but clearing fits LIFECYCLE
+  // actions, whose selection is consumed by the stage change; feedback is a
+  // conversation, and conversations continue — the next Enter addresses the
+  // same set, and the footer context line keeps naming it.
+  window.__bramClearComposer();
+  try { if (box && typeof box.setValue === "function") box.setValue(""); } catch (e) {}
+  window.__bramGateGoTranscript();
+  return true;
+};
+
+// Enter routes by selection (spec cases 1 / 2A / 2B): a live selection makes
+// Enter send feedback about it; idle, Enter chats. The Chat button bypasses
+// this router and always chats — the per-message escape the placeholder names.
+window.__bramComposerEnterSubmit = function (box) {
+  if ((window.__bramW2Selection || []).length > 0) {
+    return window.__bramSubmitFeedbackForSelection(box);
+  }
+  return window.__bramSubmitMessageAgentComposer(box, "");
 };
 
 // The Footer composer is now the Worklist's message box too, so the gate
@@ -1716,6 +1781,7 @@ window.__bramGateAct = function (kind, items, sel, shareMode) {
     window.__bramWorklist2BatchIterate(ids, body);
     window.__bramW2SetSelection([]);
     window.__bramClearComposer();
+    window.__bramGateGoTranscript();
     return;
   }
 
@@ -1759,6 +1825,23 @@ window.__bramGateAct = function (kind, items, sel, shareMode) {
   window.__bramW2SetSelection([]);
   window.__bramClearComposer();
   window.__bramWorklistActApply(r);
+  window.__bramGateGoTranscript();
+};
+
+// prototype-gate-on-transcript round 4 (docs/transcript-gate-unification.md):
+// a gate press hands the user the evidence surface — the Transcript — where
+// the agent's work on the just-approved items streams in. The Worklist's
+// last-exchange dock retired in the same round; this is its replacement
+// direction (act → watch, instead of excerpt-beside-buttons). Agent-bound
+// actions only: the host-direct feedback-less Drop resolves in ~0.1s with
+// nothing to watch, so it stays put (see the drop branch above, which
+// returns before reaching the callers of this helper).
+window.__bramGateGoTranscript = function () {
+  try {
+    if (String(window.location.hash || "").indexOf("/transcript") < 0) {
+      window.location.hash = "#/transcript";
+    }
+  } catch (e) {}
 };
 
 window.__bramClearComposer = function () {
@@ -2317,6 +2400,35 @@ window.__bramInflightBannerLabel = function (claim) {
   if (!claim || !claim.ids || !claim.ids.length) return "";
   var ids = (claim.ids || []).join(", ");
   return window.__bramClaimVerb(claim.kind, claim.statusLabel) + " " + ids;
+};
+
+// switch-to-transcript-on-action: ONE footer context line instead of three
+// competing signals (Jon: the selection must be visible from the Transcript,
+// but no new footer lines — combine). Names the working set and, when work
+// is in flight, the claim verb parenthesized:
+//   "Selected in Worklist: a, b"            — selection, idle
+//   "Selected in Worklist: a (Refining…)"   — claim live (claim ids win;
+//     the gate clears the selection at submit, so the claim is the truth)
+// Empty when neither, so the slot reserves space silently.
+// switch-to-transcript-on-action: the new-below chip pulses gently while
+// unseen content waits AND the agent is done — the beep's visual twin,
+// answering "it registers activity but when you are done it just sits
+// there". A working turn doesn't pulse: content is still arriving and the
+// climbing count is the signal; the pulse marks finished-and-unlooked-at,
+// and stops the moment the chip is clicked (unseen goes 0, chip unmounts).
+window.__bramChipShouldPulse = function (status) {
+  return !(status && status.state === "working");
+};
+
+window.__bramFooterContextLine = function (claim, sel) {
+  var ids = (claim && claim.ids) || [];
+  if (ids.length) {
+    return "Selected in Worklist: " + ids.join(", ") +
+      " (" + window.__bramClaimVerb(claim.kind, claim.statusLabel) + "…)";
+  }
+  var selection = sel || [];
+  if (selection.length) return "Selected in Worklist: " + selection.join(", ");
+  return "";
 };
 
 // issue-265: the per-item indicator's kind, resolved from ONE source with a

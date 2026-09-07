@@ -178,12 +178,15 @@
       size="sm"
       enabled="{!window.__bramInflightBlocker(gateClaim.value) &amp;&amp; window.__bramSelectionAllCommittable(gateWorklist.value.items, gateSel.value, gateClaim.value)}"
       onClick="window.__bramGateAct('commit', gateWorklist.value.items, gateSel.value, window.__bramW2ShareMode)" />
-    <Button
-      label="{'Refine ' + (gateSel.value || []).length}"
-      size="sm"
-      enabled="{!window.__bramInflightBlocker(gateClaim.value) &amp;&amp; (gateText.value || '').trim().length > 0}"
-      tooltip="One message about the selected set"
-      onClick="window.__bramGateAct('iterate', gateWorklist.value.items, gateSel.value, window.__bramW2ShareMode)" />
+    <!-- switch-to-transcript-on-action: Refine retired. It was never an
+         authorization — the other gate buttons write auth records; Refine
+         wrote none, it was conversation squatting among the signatures from
+         the era when the gate row was the only item-addressed surface. The
+         composer is that surface now: Enter with a selection sends the same
+         iterate fan-out Refine sent (__bramComposerEnterSubmit →
+         __bramWorklist2BatchIterate — one mechanism, same wire payload,
+         guards and host untouched). The gate row is pure lifecycle:
+         Start / Start & commit / Commit / Drop. -->
     <Button
       label="{'Drop ' + (gateSel.value || []).length}"
       size="sm"

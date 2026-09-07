@@ -506,13 +506,9 @@
           <Option value="claude" label="Claude" />
           <Option value="codex" label="Codex" />
         </RadioGroup>
-        <SpaceFiller />
-        <Text
-          when="{headerInflightClaim.value &amp;&amp; headerInflightClaim.value.ids &amp;&amp; headerInflightClaim.value.ids.length > 0}"
-          fontStyle="italic"
-          color="$color-primary-600"
-          overflowMode="none"
-          value="{window.__bramInflightBannerLabel(headerInflightClaim.value)}" />
+        <!-- switch-to-transcript-on-action: the "Starting <item>…" claim
+             message moved to the footer status line (Jon: it belongs there,
+             not in the app header) — see the footer HStack below. -->
         <SpaceFiller />
         <Theme fontSize-Button="$fontSize-lg">
           <Button
@@ -809,38 +805,33 @@
           <!-- Isolated in its own component so PTY-throughput churn does not
                re-render this footer's message composer. -->
           <ActivitySparkline />
+          <!-- switch-to-transcript-on-action: the status row splits 50/50 —
+               agent status left, context line right. The new-below chip
+               moved to the bottom row's fixed-width lead slot. -->
           <FooterAgentStatus
             width="*"
             enhanceStatus="{enhanceStatus.value}"
             runningSubagentCount="{window.__bramRunningSubagentCount(footerAgents.value)}" />
-          <!-- transcript-new-below-badge chip: one click to the transcript's
-               live edge from any tab. -->
-          <Button
-            when="{transcriptUnseen.value > 0}"
-            label="{'▼ ' + transcriptUnseen.value + ' new'}"
-            size="xs"
-            variant="outlined"
-            tooltip="New transcript content below — jump to the live edge"
-            onClick="window.__bramUnseenJump(); navigate('/transcript')" />
+          <!-- ONE combined context line — "Selected in Worklist: a, b" with
+               the claim verb parenthesized when work is in flight
+               ("… (Refining…)"). WRAPS rather than ellipsizing: item ids are
+               long, and the id is the message (Text wraps by default in a
+               width-constrained container —
+               xmlui.org/docs/howto/wrap-long-text-in-a-link). -->
+          <PushSource id="footerSel" initial="{[]}" subscribe="{window.bramSubscribeW2Selection()}" />
+          <HStack width="*" verticalAlignment="center">
+            <Text
+              when="{!!window.__bramFooterContextLine(headerInflightClaim.value, footerSel.value)}"
+              width="100%"
+              fontSize="$fontSize-md"
+              fontStyle="italic"
+              color="$color-primary-600"
+              value="{window.__bramFooterContextLine(headerInflightClaim.value, footerSel.value)}" />
+          </HStack>
         </HStack>
-        <!-- footer-indexing-status: names the bucket being indexed, or the
-             idle doc count + last cycle's per-bucket additions.
-             footer-status-clip-fit-content: EXPLICIT fit-content, not
-             merely widthless — a second star zone split the footer 50/50,
-             and dropping the star still clipped, because a widthless
-             container beside a width="*" sibling is the documented
-             unstable case (stacks are block-level; every child in the row
-             needs a definite width, fit-content, or star —
-             xmlui.org/docs/howto/keep-a-star-sized-element-from-collapsing).
-             fit-content hugs the label, so the status's star zone absorbs
-             the rest of the line. -->
-        <HStack width="fit-content" verticalAlignment="center" horizontalAlignment="end">
-          <Text
-            when="{footerIndexStatus.value &amp;&amp; window.__bramFooterIndexLabel(footerIndexStatus.value)}"
-            fontSize="$fontSize-sm"
-            color="$textColor-secondary"
-            value="{window.__bramFooterIndexLabel(footerIndexStatus.value)}" />
-        </HStack>
+        <!-- switch-to-transcript-on-action: the indexing status moved to the
+             bottom session-info row (flush right), clearing this row's right
+             edge — it was clipping against the status zone. -->
       </HStack>
       <!-- Canonical pending-menu surface: menus render HERE — below the
            status verb, above the message box — the same place on every tab,
@@ -851,7 +842,11 @@
       <!-- The hot TextArea is isolated from this App-scope footer. Props flow
            down only when provider state changes; the low-frequency Skills
            request flows up as a component event. -->
+      <!-- switch-to-transcript-on-action: the addressee signal lives in the
+           composer's own placeholder (no extra line); route rides in as a
+           prop because $pathname is Main-scope. -->
       <MessageAgentComposer
+        route="{$pathname}"
         activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}"
         onSkillsRequested="window.__bramOpenSkillsLauncher(skillsList, skillsDialog)" />
       <!-- Subagent chips strip (surface-subagent-activity-in-pane):
@@ -944,16 +939,49 @@
            in chip styling, so dropdown-overflow agents indicate the same
            way. Falls back to the plain meta line until a rebuilt
            helpers.js provides __bramFooterSessionLine. -->
+      <!-- switch-to-transcript-on-action: the bottom compound — new-below
+           chip FIRST (most salient) in a fixed-width slot so the rest of
+           the line never jitters as the chip appears, disappears, or its
+           count changes; then session info; indexing flush right.
+           SpaceFiller is the sanctioned ends-alignment idiom
+           (xmlui.org/docs/howto/align-items-to-row-ends-with-spacefiller). -->
       <HStack
         when="{window.__bramSessionMetaLine(window.__bramCurrentSessionOf(footerSessions.value))}"
         width="100%"
-        horizontalAlignment="center"
+        verticalAlignment="center"
         paddingHorizontal="$space-1">
+        <!-- Gentle pulse while the agent is done and this content is
+             unlooked-at — the ActivitySparkline's animation idiom. The
+             animation rides the wrapping HStack, the sparkline's proven
+             host: the first attempt put it on the Button, which silently
+             ignored it (field-tested 2026-09-07, no pulse under correct
+             conditions). The slot is fixed-width, so animating the wrapper
+             moves nothing but opacity. -->
+        <HStack
+          width="5.5rem"
+          verticalAlignment="center"
+          animation="{transcriptUnseen.value > 0 &amp;&amp; window.__bramChipShouldPulse(mainAgentStatus.value) ? 'fadein' : ''}"
+          animationOptions="{{ duration: 2000, reverse: true, loop: true }}">
+          <Button
+            when="{transcriptUnseen.value > 0}"
+            label="{'▼ ' + transcriptUnseen.value + ' new'}"
+            size="xs"
+            variant="outlined"
+            tooltip="New transcript content — jump to the live edge"
+            onClick="window.__bramUnseenJump(); navigate('/transcript')" />
+        </HStack>
         <Text
           fontSize="$fontSize-sm"
           color="$textColor-secondary"
           maxLines="1"
           value="{(window.__bramFooterSessionLine || window.__bramSessionMetaLine)(window.__bramCurrentSessionOf(footerSessions.value), transcriptAgentId, footerAgents.value)}" />
+        <SpaceFiller />
+        <Text
+          when="{footerIndexStatus.value &amp;&amp; window.__bramFooterIndexLabel(footerIndexStatus.value)}"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          maxLines="1"
+          value="{window.__bramFooterIndexLabel(footerIndexStatus.value)}" />
       </HStack>
       <!-- Passive send-ledger note — in the sticky footer so it's always
            visible. Text comes from the host ledger's resolved outcomes;

@@ -35,7 +35,7 @@
        debounced in helpers.js; blur and submit flush/clear explicitly. -->
   <Form
     width="100%"
-    onSubmit="window.__bramSubmitMessageAgentComposer(composerBox, '')">
+    onSubmit="window.__bramComposerEnterSubmit(composerBox)">
     <property name="buttonRowTemplate"><Fragment/></property>
     <HStack width="100%" gap="$space-2" verticalAlignment="center">
       <Button
@@ -50,39 +50,53 @@
           voiceRecording = toggleVoiceForCurrentTarget(voiceRecording);
         </event>
       </Button>
-      <TextArea
-        id="composerBox"
-        initialValue="{window.__bramRestoreWorklistDraft()}"
-        placeholder="{(w2Sel.value || []).length >= 0 ? window.__bramComposerPlaceholder() : ''}"
-        enterSubmits="true"
-        autoSize="true"
-        minRows="2"
-        maxRows="4"
-        width="*"
-        onDidChange="(value) => window.__bramMessageAgentInputChanged(value)">
-        <event name="gotFocus">
-          setWorklistVoiceTarget('message-agent');
-          setFocusedFeedbackItemId('');
-        </event>
-        <event name="lostFocus">
-          window.__bramMessageAgentBlur();
-        </event>
-      </TextArea>
-      <VStack width="8rem" horizontalAlignment="start" itemWidth="fit-content" gap="$space-1">
+      <!-- switch-to-transcript-on-action: quieter placeholder — it carries
+           the addressee signal now, and instruction-sized text read as
+           content. Theme var per
+           https://www.xmlui.org/docs/reference/components/TextArea#styling -->
+      <Theme fontSize-placeholder-TextArea="$fontSize-sm" width="*">
+        <TextArea
+          id="composerBox"
+          initialValue="{window.__bramRestoreWorklistDraft()}"
+          placeholder="{window.__bramComposerPlaceholder($props.route, w2Sel.value || [])}"
+          enterSubmits="true"
+          autoSize="true"
+          minRows="2"
+          maxRows="4"
+          width="*"
+          onDidChange="(value) => window.__bramMessageAgentInputChanged(value)">
+          <event name="gotFocus">
+            setWorklistVoiceTarget('message-agent');
+            setFocusedFeedbackItemId('');
+          </event>
+          <event name="lostFocus">
+            window.__bramMessageAgentBlur();
+          </event>
+        </TextArea>
+      </Theme>
+      <!-- switch-to-transcript-on-action: was 8rem, sized for the retired
+           "skip worklist" label; Chat/Esc are short and stable, so
+           fit-content closes the dead gap before the ▲/▼ column (whose own
+           end-anchored spread is deliberate — position carries meaning). -->
+      <VStack width="fit-content" horizontalAlignment="start" itemWidth="fit-content" gap="$space-1">
         <Button
-          label="send"
+          label="Chat"
           variant="ghost"
           size="xs"
-          tooltip="Send message to agent"
+          tooltip="Message the agent about anything"
           onClick="window.__bramSubmitMessageAgentComposer(composerBox, '')" />
+        <!-- switch-to-transcript-on-action: the Feedback button retired one
+             round after it arrived — with a selection, Enter and every gate
+             button already send the message as feedback, so a third
+             affordance was redundant (Jon: "clicking any button already
+             sends Feedback"). The placeholder carries the teaching; Chat
+             stays as the per-message escape to general discussion. Enter's
+             selection routing (__bramComposerEnterSubmit) is unchanged.
+             The skip-worklist button also remains retired (the typed
+             skip-worklist: prefix and the "just do it" phrase are the
+             direct-edit grants until that design settles). -->
         <Button
-          label="skip worklist"
-          variant="ghost"
-          size="xs"
-          tooltip="Send message prefixed with skip-worklist:"
-          onClick="window.__bramSubmitMessageAgentComposer(composerBox, 'skip-worklist')" />
-        <Button
-          label="esc"
+          label="Esc"
           variant="ghost"
           size="xs"
           tooltip="Send the Escape key"

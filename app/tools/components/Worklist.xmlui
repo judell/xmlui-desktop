@@ -155,10 +155,10 @@
   <!-- issue-328: the worklist2Close page var and its mirror listener are
        gone — the gate bar owns the close toggle, and the expansion's
        comment box writes window.__bramW2CloseMap directly. -->
-  <PushSource
-    id="projectedTurnsDS"
-    initial="{window.__bramProjectedLastExchange(null)}"
-    subscribe="{window.bramSubscribeProjectedLastExchange()}" />
+  <!-- prototype-gate-on-transcript round 4: projectedTurnsDS is gone with
+       the last-exchange dock it fed (sole consumer). The helpers.js
+       projected-turns machinery stays — dormant here, still the transport
+       other surfaces could subscribe to. -->
   <VStack padding="$space-4" gap="$space-3">
     <HStack gap="$space-3" verticalAlignment="center" paddingBottom="$space-2">
       <H2>Worklist</H2>
@@ -1020,43 +1020,14 @@
          (WorklistGateBar.xmlui), above the gate buttons, so it can never
          sit below the fold. -->
     </VStack>
-    <!-- Parity: You/Agent last-exchange dock (old tab's shape, simplified:
-         no fullscreen image viewer; dim while a newer user message awaits
-         its answer). -->
-    <VStack var.dockExchange="{projectedTurnsDS.value || window.__bramProjectedLastExchange(null)}">
-      <!-- Dim the last exchange while a selection is live (Jon: "Dim the last
-           message and response while this is going on, while any selections
-           are active and while the buttons are then visible below").
-           With a selection the gate bar is showing in the Footer and the
-           question on screen is what to DO with the ticked rows; the previous
-           turn is context, not the subject. Recedes rather than disappears -
-           it is often what you are deciding about. -->
-      <VStack
-        when="{(dockExchange.lastExchange &amp;&amp; dockExchange.lastExchange.userText) || (dockExchange.lastAssistantText &amp;&amp; dockExchange.lastAssistantText.text)}"
-        opacity="{(worklist2Selected || []).length > 0 ? 0.4 : 1}"
-        gap="$space-2"
-        width="100%"
-        paddingTop="$space-4">
-        <VStack
-          when="{dockExchange.lastExchange &amp;&amp; dockExchange.lastExchange.userText}"
-          gap="$space-1"
-          width="100%">
-          <Text fontSize="$fontSize-xs" color="$textColor-secondary" value="You: last message" />
-          <VStack maxHeight="12em" overflowY="auto" width="100%">
-            <Markdown content="{dockExchange.lastExchange.userText}" interpolateBindings="false" allowHtml="false" />
-          </VStack>
-        </VStack>
-        <VStack
-          when="{dockExchange.lastAssistantText &amp;&amp; dockExchange.lastAssistantText.text}"
-          gap="$space-1"
-          width="100%"
-          opacity="{(dockExchange.lastExchange &amp;&amp; dockExchange.lastExchange.userText &amp;&amp; !dockExchange.lastExchange.assistantText) ? 0.45 : 1}">
-          <Text fontSize="$fontSize-xs" color="$textColor-secondary" value="Agent: last response" />
-          <VStack maxHeight="20em" overflowY="auto" width="100%">
-            <Markdown content="{window.__bramStripImagePaths(dockExchange.lastAssistantText.text)}" interpolateBindings="false" allowHtml="false" />
-          </VStack>
-        </VStack>
-      </VStack>
-    </VStack>
+    <!-- prototype-gate-on-transcript round 4 (docs/transcript-gate-unification.md):
+         the You/Agent last-exchange dock is GONE. The drive's finding: an
+         excerpt on the Worklist never carried enough evidence, and the
+         evidence surface already exists — the Transcript. The loop closes
+         from the other side now: a gate button press auto-switches to the
+         Transcript (__bramGateAct in helpers.js), so acting hands you the
+         full conversation instead of a peek. This reverses the earlier
+         dock-and-dim design (2026-08 era) by the same author's live verdict;
+         the dock's markup is in git history if the pendulum swings back. -->
   </VStack>
 </Component>
